@@ -7,23 +7,34 @@ pipeline {
         timestamps()
     }
 
+    environment {
+        AWS_REGION = 'us-east-1'
+        ECR_REGISTRY = '130299713508.dkr.ecr.us-east-1.amazonaws.com'
+        BACKEND_REPO = 'techpathway-challenge-2-backend'
+        FRONTEND_REPO = 'techpathway-challenge-2-frontend'
+    }
+
     stages {
         stage('Checkout') {
             steps {
                 checkout scm
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: 'git rev-parse --short=7 HEAD',
+                        returnStdout: true
+                    ).trim()
+                }
+                echo "Docker image tag: ${env.IMAGE_TAG}"
             }
         }
 
         stage('Verify Build Environment') {
             steps {
                 sh '''
-                    echo "Checking Jenkins build environment..."
-
                     git --version
                     docker --version
                     aws --version
-
-                    echo "Build environment verified."
+                    aws sts get-caller-identity
                 '''
             }
         }
@@ -32,7 +43,7 @@ pipeline {
             steps {
                 sh '''
                     docker build \
-                      -t techpathway-backend:jenkins-test \
+                      -t "$ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG" \
                       ./backend
                 '''
             }
@@ -42,19 +53,43 @@ pipeline {
             steps {
                 sh '''
                     docker build \
-                      -t techpathway-frontend:jenkins-test \
+                      -t "$ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG" \
                       ./frontend
                 '''
             }
         }
 
-        stage('Verify Docker Images') {
+        stage('Push Docker Images to ECR') {
+            steps {
+                sh '''#!/bin/bash
+                    set -euo pipefail
+
+                    export DOCKER_CONFIG="$(mktemp -d)"
+                    trap 'docker logout "$ECR_REGISTRY" >/dev/null 2>&1 || true; rm -rf "$DOCKER_CONFIG"' EXIT
+
+                    aws ecr get-login-password --region "$AWS_REGION" |
+                      docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+                    docker push "$ECR_REGISTRY/$BACKEND_REPO:$IMAGE_TAG"
+                    docker push "$ECR_REGISTRY/$FRONTEND_REPO:$IMAGE_TAG"
+                '''
+            }
+        }
+
+        stage('Verify ECR Images') {
             steps {
                 sh '''
-                    docker image inspect techpathway-backend:jenkins-test
-                    docker image inspect techpathway-frontend:jenkins-test
+                    aws ecr describe-images \
+                      --repository-name "$BACKEND_REPO" \
+                      --image-ids imageTag="$IMAGE_TAG" \
+                      --region "$AWS_REGION"
 
-                    echo "Both Docker images built successfully."
+                    aws ecr describe-images \
+                      --repository-name "$FRONTEND_REPO" \
+                      --image-ids imageTag="$IMAGE_TAG" \
+                      --region "$AWS_REGION"
+
+                    echo "Both Docker images uploaded successfully."
                 '''
             }
         }
@@ -62,7 +97,7 @@ pipeline {
 
     post {
         success {
-            echo 'Jenkins Docker build pipeline completed successfully!'
+            echo 'Jenkins ECR pipeline completed successfully!'
         }
 
         failure {
