@@ -93,14 +93,14 @@ pipeline {
             }
         }
 
-    }
+
 
         stage('Register ECS Task Definitions') {
             steps {
                 sh '''#!/bin/bash
                     set -euo pipefail
 
-                    f
+
 for APP in frontend backend; do
     FAMILY="techpathway-challenge-2-$APP"
 
